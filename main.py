@@ -34,11 +34,10 @@ common_args = [
     ctypes.POINTER(SolutionOut),
 ]
 
-sa.randomSearch.argtypes = common_args
-sa.greedySearch.argtypes = common_args
-sa.steepestSearch.argtypes = common_args
-sa.greedySearchEdges.argtypes = common_args
-sa.steepestSearchEdges.argtypes = common_args
+sa.weighted_regret_heuristic.argtypes = common_args
+sa.baseline_alg.argtypes = common_args
+sa.candidates_alg.argtypes = common_args
+sa.cache_alg.argtypes = common_args
 
 
 def loadData(filename):
@@ -97,68 +96,6 @@ def random_init():
         sol.cycle2[i] = c
     return sol
 
-
-def weighted_regret_heuristic(matrix, alpha = 1.0):
-    n = len(matrix)
-    indices = list(range(n))
-    random.shuffle(indices)
-
-    target_size1 = (n + 1) // 2
-    target_size2 = n // 2
-
-    cycle1, cycle2 = [indices[0], indices[1]], [indices[2], indices[3]]
-    visited = set(cycle1 + cycle2)
-
-
-    while len(visited) < n:
-        best_score, best_node, best_cycle, best_pos = -float('inf'), None, None, None
-
-        for node in indices:
-            if node in visited:
-                continue
-
-            best_cost, second_best_cost = float('inf'), float('inf')
-            best_position, best_cycle_choice = None, None
-
-            if len(cycle1) < target_size1:
-                possible_cycles = [cycle1]
-            elif len(cycle2) < target_size2:
-                possible_cycles = [cycle2]
-            else:
-                possible_cycles = [cycle1, cycle2]
-
-            for cycle in possible_cycles:
-                for i in range(len(cycle)):
-                    cost = (matrix[cycle[i]][node] + matrix[node][cycle[(i + 1) % len(cycle)]]
-                            - matrix[cycle[i]][cycle[(i + 1) % len(cycle)]])
-
-                    if cost < best_cost:
-                        second_best_cost = best_cost
-                        best_cost = cost
-                        best_position = i + 1
-                        best_cycle_choice = cycle
-                    elif cost < second_best_cost:
-                        second_best_cost = cost
-
-            regret = second_best_cost - best_cost if second_best_cost < float('inf') else best_cost
-            score = -alpha * best_cost + alpha* regret
-
-            if score > best_score:
-                best_score, best_node, best_cycle, best_pos = score, node, best_cycle_choice, best_position
-
-        if best_cycle is not None and best_node is not None:
-            best_cycle.insert(best_pos, best_node)
-            visited.add(best_node)
-        else:
-            break
-
-    sol = SolutionOut()
-    sol.value = -1;
-    for i,c in enumerate(cycle1):
-        sol.cycle1[i] = c
-    for i,c in enumerate(cycle2):
-        sol.cycle2[i] = c
-    return sol
 
 def print_results_value(results):
     results_list = results.items()
@@ -233,56 +170,38 @@ def main():
     results = {}
     kroA, kroB = loadData("kroA200.tsp"), loadData("kroB200.tsp")
 
-
     for instance_name, data in zip(["kroA200", "kroB200"], [kroA, kroB]):
         inst = genInst(data)
         distMatrix = genDistMatrix(data)
-        tmp = []
-        id_name = f"{instance_name}_randomSearch"
-        for i in tqdm(range(100)):
-            output = random_init()
-            args = inst, ctypes.byref(output)
-            start = time.perf_counter()
-            sa.randomSearch(*args)
-            elapsed = time.perf_counter() - start
-            tmp.append([output, elapsed*1000])
-        results.update({id_name: tmp})
 
-        for init_output in ["random", "wrh"]:
-            for algorithm in ["steepest", "greedy"]:
-                for inner_neighborhood in ["vertex", "edge"]:
-                    id_name = f"{instance_name}_{init_output}_{inner_neighborhood}_{algorithm}"
-                    print(id_name)
-                    tmp_res = []
-                    for i in tqdm(range(100)):
-                        output = None
-                        if init_output == "random":
-                            output = random_init()
-                        else:
-                            output = weighted_regret_heuristic(distMatrix)
-                        
-                        args = inst, ctypes.byref(output)
-                        start = time.perf_counter()
-                        if algorithm == "steepest":
-                            if inner_neighborhood == "edge":
-                                sa.steepestSearchEdges(*args)
-                            else:
-                                sa.steepestSearch(*args)
-                        else:
-                            if inner_neighborhood == "edge":
-                                sa.greedySearchEdges(*args)
-                            else:
-                                sa.greedySearch(*args)
+        for algorithm in ["weighted_regret_heuristic","baseline","candidates"]:
+            id_name = f"{instance_name}_{algorithm}"
+            print(id_name)
+            tmp_res = []
+            for i in tqdm(range(100)):
+                output = random_init()
 
-                        elapsed = time.perf_counter() - start
+                args = inst, ctypes.byref(output)
+                start = time.perf_counter()
+                if algorithm == "weighted_regret_heuristic":
+                    sa.weighted_regret_heuristic(*args)
+                elif algorithm == "baseline":
+                    sa.baseline_alg(*args)
+                elif algorithm == "candidates":
+                    sa.candidates_alg(*args)
+                elif algorithm == "cache":
+                    sa.cache_alg(*args)
 
-                        tmp_res.append([output, elapsed*1000])
-                    results.update({id_name: tmp_res})
+                elapsed = time.perf_counter() - start
+
+                tmp_res.append([output, elapsed*1000])
+            results.update({id_name: tmp_res})
 
     print("="*15)
     print_results_value(results)
     print("time [ms]")
     print_results_time(results)
     save_best(results, kroA, kroB)
+
 if __name__ == '__main__':
     main()
