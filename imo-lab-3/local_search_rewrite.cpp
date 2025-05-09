@@ -9,11 +9,11 @@
 #include <stdint.h>
 #include <list>
 #include <limits>
-
+#include <set>
 
 #define NEIGHBOURHOOD_SIZE 10
 #define NODE_COUNT 200
-#define CYCLE_SIZE 100 //(NODE_COUNT / 2)
+#define CYCLE_SIZE (NODE_COUNT / 2)
 
 extern "C" {
 
@@ -33,6 +33,7 @@ extern "C" {
     enum Applicability {
         APPLICABLE,
         FUTURE_MAYBE,
+        NEEDS_REVERSAL,
         NOT_APPLICABLE
     };
 
@@ -40,7 +41,77 @@ extern "C" {
         int delta;
         bool isEdgeMove;
         int a, b, c, d, e, f; // zapamiętane krawędzie
+
+        void canon() {
+            if(isEdgeMove) {
+                int t = std::min({a,b,c,d});
+                int i=0;
+                for (const auto& v : {a,b,c,d}) {
+                    if (v==t) break;
+                    i++;
+                }
+
+                switch (i) {
+                    case 0:
+                        break;
+                    case 1:
+                        std::swap(a,b);
+                        std::swap(c,d);
+                        break;
+                    case 2:
+                        std::swap(a,c);
+                        std::swap(b,d);
+                        break;
+                    case 3:
+                        std::swap(a,d);
+                        std::swap(b,c);
+                        break;
+                }
+            } else {
+                if (a > c) {
+                    std::swap(a,c);
+                }
+                if (d > f) {
+                    std::swap(d,f);
+                }
+                if (a > d) {
+                    std::swap(a,d);
+                    std::swap(b,e);
+                    std::swap(c,f);
+                }
+            }
+        }
+
+    //#define CONTAINER_LIST
+
+#ifdef CONTAINER_LIST
+        bool operator<(const Move& other) const {
+            return delta < other.delta;
+        }
+#else
+        bool operator<(const Move& other) const {
+            return std::tie(delta, isEdgeMove, a, b, c, d, e, f) <
+                   std::tie(other.delta, other.isEdgeMove, other.a, other.b, other.c, other.d, other.e, other.f);
+
+        }
+#endif
     };
+    
+
+
+#ifdef CONTAINER_LIST
+    typedef std::list<Move> MoveContainer;
+    void add_move(MoveContainer& LM, Move a) {
+        LM.push_back(a);
+    }
+#else
+    typedef std::set<Move> MoveContainer;
+    void add_move(MoveContainer& LM, Move a) {
+        a.canon();
+        LM.insert(a);
+    }
+
+#endif
 
     int absMod(int val, int mod) {
         while(val<0) val+=mod;
@@ -49,7 +120,7 @@ extern "C" {
 
     bool sameCycle(int i1, int i2) {
         if (i1 < CYCLE_SIZE) return i2 < CYCLE_SIZE;
-        if (i1 >= CYCLE_SIZE) return i2 >= CYCLE_SIZE;
+        else return i2 >= CYCLE_SIZE;
     }
 
     int indexOf(const int c[NODE_COUNT], int vertex) {
@@ -59,64 +130,54 @@ extern "C" {
         return -1;
     }
 
+    enum edge_type {
+        direct,
+        reversed,
+        no_edge
+    };
+
+    edge_type check_edge(const int* cycles, int index_u, int v) {
+        int v1 = cycles[(index_u + 1) % CYCLE_SIZE + (index_u >= CYCLE_SIZE ? CYCLE_SIZE : 0)];
+        int v2 = cycles[(index_u - 1 + CYCLE_SIZE) % CYCLE_SIZE + (index_u >= CYCLE_SIZE ? CYCLE_SIZE : 0)];
+        if (v==v1) return direct;
+        if (v==v2) return reversed;
+        return no_edge;
+    }
+
     Applicability isEdgeMoveApplicable(const Move& m, const int* cycles) {
-        auto check_edge = [&](int u, int v) {
-            for (int i = 0; i < NODE_COUNT; i++) {
-                int from = cycles[i];
-                int to = cycles[(i + 1) % CYCLE_SIZE + (i >= CYCLE_SIZE ? CYCLE_SIZE : 0)];
-                if ((from == u && to == v) || (from == v && to == u)) return true;
-            }
-            return false;
-        };
+        int index_a = indexOf(cycles, m.a);
+        int index_c = indexOf(cycles, m.c);
 
-        bool ab_exists = check_edge(m.a, m.b);
-        bool cd_exists = check_edge(m.c, m.d);
+        if(!sameCycle(index_a,index_c)) return NOT_APPLICABLE;
 
-        if (!ab_exists || !cd_exists) return NOT_APPLICABLE;
+        edge_type ab_edge = check_edge(cycles, index_a, m.b);
+        edge_type cd_edge = check_edge(cycles, index_c, m.d);
 
-        bool ab_direct = false, cd_direct = false;
-        for (int i = 0; i < NODE_COUNT; i++) {
-            int from = cycles[i];
-            int to = cycles[(i + 1) % CYCLE_SIZE + (i >= CYCLE_SIZE ? CYCLE_SIZE : 0)];
-            if (from == m.a && to == m.b) ab_direct = true;
-            if (from == m.c && to == m.d) cd_direct = true;
-            if(ab_direct && cd_direct) break;
-        }
-
-        if (ab_direct && cd_direct) return APPLICABLE;
+        if (ab_edge==no_edge || cd_edge==no_edge) return NOT_APPLICABLE;
+        if (ab_edge==direct&&cd_edge==direct) return APPLICABLE;
+        if (ab_edge==reversed&&cd_edge==reversed) return NEEDS_REVERSAL;
         return FUTURE_MAYBE;
     }
 
     Applicability isVertexMoveApplicable(const Move& m, const int* cycles) {
-        auto check_edge = [&](int u, int v) {
-            for (int i = 0; i < NODE_COUNT; i++) {
-                int from = cycles[i];
-                int to = cycles[(i + 1) % CYCLE_SIZE + (i >= CYCLE_SIZE ? CYCLE_SIZE : 0)];
-                if ((from == u && to == v) || (from == v && to == u)) return true;
-            }
-            return false;
-        };
+        int index_b = indexOf(cycles, m.b);
+        int index_e = indexOf(cycles, m.e);
 
-        bool ab_exists = check_edge(m.a, m.b);
-        bool bc_exists = check_edge(m.b, m.c);
+        if(sameCycle(index_b,index_e)) return NOT_APPLICABLE;
 
-        bool de_exists = check_edge(m.d, m.e);
-        bool ef_exists = check_edge(m.e, m.f);
+        int index_a = indexOf(cycles, m.a);
+        int index_d = indexOf(cycles, m.d);
 
-        if (!ab_exists || !bc_exists || !de_exists || !ef_exists) return NOT_APPLICABLE;
+        edge_type ab_exists = check_edge(cycles, index_a, m.b);
+        edge_type bc_exists = check_edge(cycles, index_b, m.c);
 
-        bool ab_direct = false, bc_direct = false, de_direct=false, ef_direct=false;
-        for (int i = 0; i < NODE_COUNT; i++) {
-            int from = cycles[i];
-            int to = cycles[(i + 1) % CYCLE_SIZE + (i >= CYCLE_SIZE ? CYCLE_SIZE : 0)];
-            if (from == m.a && to == m.b) ab_direct = true;
-            if (from == m.b && to == m.c) bc_direct = true;
-            if (from == m.d && to == m.e) de_direct = true;
-            if (from == m.e && to == m.f) ef_direct = true;
-            if (ab_direct && bc_direct && de_direct && ef_direct) break;
-        }
+        edge_type de_exists = check_edge(cycles, index_d, m.e);
+        edge_type ef_exists = check_edge(cycles, index_e, m.f);
 
-        if (ab_direct && bc_direct && de_direct && ef_direct) return APPLICABLE;
+        if (ab_exists==no_edge || bc_exists==no_edge || de_exists==no_edge || ef_exists==no_edge) return NOT_APPLICABLE;
+       // TODO
+        if (((ab_exists==direct && bc_exists==direct)||(ab_exists==reversed && bc_exists==reversed)) && ((de_exists==direct && ef_exists==direct)||(de_exists==reversed && ef_exists==reversed))) return APPLICABLE;
+
         return FUTURE_MAYBE;
     }
 
@@ -322,25 +383,25 @@ extern "C" {
         return delta;
     }
 
+    int evalEdgeSwapValues(const Instance& instance, const int cycles[NODE_COUNT], int a, int b, int c, int d) {
+        (void)cycles;
+        int delta = 0;
+        delta += instance.dist[a][c];
+        delta += instance.dist[b][d];
+        delta -= instance.dist[a][b];
+        delta -= instance.dist[c][d];
+        return delta;
+    }
+
     // i1 i i2 należą do tego samego cyklu, i1 != i2, bo to nie ma sensu
     void swapEdge(int* c, int i1, int i2) {
-#if 0
-        i1++;
-        int l = i1;
-        if (i2 < i1) l= i2;
-        int m = i1+i2-l;
-        for(int i = 0; i < std::abs(i1-i2)/2+1; i++) {
-            int t = c[l+i];
-            c[l+i] = c[m-i];
-            c[m-i] = t;
-        }
-#else
-        int f = i1+1, s = i2;
+        int f = i1, s = i2;
         if (f >= CYCLE_SIZE) {
             c += CYCLE_SIZE;
             f %= CYCLE_SIZE;
             s %= CYCLE_SIZE;
         }
+        f = absMod(f+1, CYCLE_SIZE);
 
         int len = (s - f + CYCLE_SIZE) % CYCLE_SIZE + 1;
         for (int i = 0; i < len / 2; ++i) {
@@ -348,7 +409,6 @@ extern "C" {
             int b = (s - i + CYCLE_SIZE) % CYCLE_SIZE;
             std::swap(c[a], c[b]);
         }
-#endif
     }
 
     int evalVertexSwap(const Instance& instance, const int cycles[NODE_COUNT], int i1, int i2) {
@@ -394,6 +454,23 @@ extern "C" {
             delta -= instance.dist[d][e];
             delta -= instance.dist[e][f];
         }
+
+        return delta;
+    }
+
+    // tylko dla międzycyklowych
+    int evalVertexSwapValue(const Instance& instance, const int cycles[NODE_COUNT], int a, int b, int c, int d, int e, int f) {
+        int delta = 0;
+
+        delta += instance.dist[b][f];
+        delta += instance.dist[a][e];
+        delta += instance.dist[e][c];
+        delta += instance.dist[d][b];
+        delta -= instance.dist[a][b];
+        delta -= instance.dist[b][c];
+        delta -= instance.dist[d][e];
+        delta -= instance.dist[e][f];
+        
 
         return delta;
     }
@@ -449,16 +526,18 @@ extern "C" {
             // Jeśli znaleziono lepsze rozwiązanie, przejdź do niego
             if (improved) {
                 auto[f, s] = bestMove;
+
                 if(edgeMove) {
                     swapEdge(sol.cycles, f, s);
                 } else {
                     swapVertex(sol.cycles, f, s);
                 }
+
                 sol.value += bestDelta;
             }
 
         } while (improved);
-    
+
         sol.backToOut(outSolution);
     }
 
@@ -506,40 +585,62 @@ extern "C" {
         sol.eval(instance);
 
         Neighbourhood candidates = generate_candidates(instance);
-        
+        static std::random_device rd;
+        static std::mt19937 g(rd());
         bool improved;
         do {
             improved = false;
-            std::pair<int,int> bestMove;
-            int bestDelta = 0;
-    
+            Move bestMove = {0, false, -1, -1, -1, -1, -1, -1};
+            std::array<int, NODE_COUNT> indices;
+            std::iota(indices.begin(), indices.end(), 0);
+            std::shuffle(indices.begin(), indices.end(), g);
            
             // raczej powinno być, że jeśli są w jednym cyklu to zamieniamy krawędzie, a nie wierzchołki
             for (int i = 0; i < NODE_COUNT; i++) {
                 for (int j = 0; j < NEIGHBOURHOOD_SIZE; j++) {
-                    int f, s = indexOf(sol.cycles, candidates[i][j]);
-                    if (i == CYCLE_SIZE-1) {
-                        f = 0;
-                    } else if (i == NODE_COUNT-1) {
-                        f = CYCLE_SIZE;
-                    } else {
-                        f = i+1;
+                    int f = indices[i];
+                    int s = indexOf(sol.cycles, candidates[f][j]);
+                    int fp = absMod(f-1, CYCLE_SIZE) + (f>=CYCLE_SIZE?CYCLE_SIZE:0);
+                    int fn = absMod(f+1, CYCLE_SIZE) + (f>=CYCLE_SIZE?CYCLE_SIZE:0);
+
+                    if (!sameCycle(fp, s)) {
+                        int delta = evalVertexSwap(instance, sol.cycles, fp, s);
+                        if (delta < 0 && delta < bestMove.delta) {
+                            bestMove = {delta, false, fp, s, -1, -1, -1, -1};
+                            improved = true;
+                        }
                     }
-                    int delta = evalVertexSwap(instance, sol.cycles, f, s);
-                    if (delta < 0 && delta < bestDelta) {
-                        bestDelta = delta;
-                        bestMove = {f, s};
-                        improved = true;
+
+                    if (!sameCycle(fn, s)) {
+                        int delta = evalVertexSwap(instance, sol.cycles, fn, s);
+                        if (delta < 0 && delta < bestMove.delta) {
+                            bestMove = {delta, false, fn, s, -1, -1, -1, -1};
+                            improved = true;
+                        }
                     }
+
+                    if(f==s)continue;
+                    if (sameCycle(f, s)) {
+                        int delta = evalEdgeSwap(instance, sol.cycles, f, s);
+                        if (delta < 0 && delta < bestMove.delta) {
+                            bestMove = {delta, true, f, s, -1, -1, -1, -1};
+                            improved = true;
+                        }
+                    }
+                    
                 }
             }
             
     
             // Jeśli znaleziono lepsze rozwiązanie, przejdź do niego
             if (improved) {
-                auto[f, s] = bestMove;
-                swapVertex(sol.cycles, f, s);
-                sol.value += bestDelta;
+                if(bestMove.isEdgeMove) {
+                    swapEdge(sol.cycles, bestMove.a, bestMove.b);
+                } else {
+                    swapVertex(sol.cycles, bestMove.a, bestMove.b);
+                }
+
+                sol.value += bestMove.delta;
             }
 
         } while (improved);
@@ -547,38 +648,118 @@ extern "C" {
         sol.backToOut(outSolution);
     }
 
+
+
     void cache_alg(const Instance& instance, SolutionOut* outSolution) {
         Solution sol(outSolution);
         sol.eval(instance);
-        std::list<Move> LM;
+        MoveContainer LM;
 
-        auto initializeMoveList = [&](std::list<Move>& LM) {
-#if 1
+        auto initializeMoveList = [&](MoveContainer& LM) {
+
             for (int c = 0; c < 2; ++c) {
                 for (int i = 0; i < CYCLE_SIZE; ++i) {
                     for (int j = 0; j < CYCLE_SIZE; ++j) {
-                        if(i >= j ) continue;
+                        if(i == j ) continue;
                         if (absMod(i + 1, CYCLE_SIZE) == j || absMod(j + 1, CYCLE_SIZE) == i) continue;
                         int idx1 = i + c * CYCLE_SIZE;
                         int idx2 = j + c * CYCLE_SIZE;
+                        int idx2succ = absMod(idx2 + 1, CYCLE_SIZE) + (c * CYCLE_SIZE);
+                        int a = sol.cycles[idx1];
+                        int b = sol.cycles[absMod(idx1 + 1, CYCLE_SIZE) + (c * CYCLE_SIZE)];
+                        int c1 = sol.cycles[idx2];
+                        int d = sol.cycles[idx2succ];
+                        
                         int delta = evalEdgeSwap(instance, sol.cycles, idx1, idx2);
                         if (delta < 0) {
-                            int a = sol.cycles[idx1];
-                            int b = sol.cycles[absMod(idx1 + 1, CYCLE_SIZE) + (c * CYCLE_SIZE)];
-                            int c1 = sol.cycles[idx2];
-                            int d = sol.cycles[absMod(idx2 + 1, CYCLE_SIZE) + (c * CYCLE_SIZE)];
-                            LM.push_back({delta, true, a, b, c1, d, -1, -1});
+                            add_move(LM, {delta, true, a, b, c1, d, -1, -1});
+                        }
+                        delta = evalEdgeSwapValues(instance, sol.cycles, a, b, d, c1);
+                        if (delta < 0) {
+                            add_move(LM, {delta, true, a, b, d, c1, -1, -1});
+                        }
+                        delta = evalEdgeSwapValues(instance, sol.cycles, b, a, c1, d);
+                        if (delta < 0) {
+                            add_move(LM, {delta, true, b, a, c1, d, -1, -1});
                         }
                     }
                 }
             }
-#endif
+
             for (int i = 0; i < CYCLE_SIZE; ++i) {
                 for (int j = 0; j < CYCLE_SIZE; ++j) {
+                    int i1 = i;
+                    int i2 = j + CYCLE_SIZE;
+
+                    int temp1n = absMod(i1+1, CYCLE_SIZE);
+                    int temp2n = absMod(i2+1, CYCLE_SIZE);
+                    int temp1p = absMod(i1-1, CYCLE_SIZE);
+                    int temp2p = absMod(i2-1, CYCLE_SIZE);
+                    int i1n = i1 < CYCLE_SIZE ? temp1n : temp1n + CYCLE_SIZE;
+                    int i2n = i2 < CYCLE_SIZE ? temp2n : temp2n + CYCLE_SIZE;
+                    int i1p = i1 < CYCLE_SIZE ? temp1p : temp1p + CYCLE_SIZE;
+                    int i2p = i2 < CYCLE_SIZE ? temp2p : temp2p + CYCLE_SIZE;
+
+                    int a = sol.cycles[i1p];
+                    int b = sol.cycles[i1];
+                    int c = sol.cycles[i1n];
+                    int d = sol.cycles[i2p];
+                    int e = sol.cycles[i2];
+                    int f = sol.cycles[i2n];
                     int delta = evalVertexSwap(instance, sol.cycles, i, j + CYCLE_SIZE);
                     if (delta < 0) {
-                        int i1 = i;
-                        int i2 = j + CYCLE_SIZE;
+                        add_move(LM, {delta, false, a, b, c, d, e, f});
+                    }
+                }
+            }
+            #ifdef CONTAINER_LIST
+            LM.sort();
+            #endif
+        };
+
+        auto updateMoveList = [&](MoveContainer& LM, const Move& performedMove) {
+            // po zamianie krawędzi
+            if (performedMove.isEdgeMove) {
+
+                for (const auto& val : {performedMove.a, performedMove.b}) {
+                    int cycle = indexOf(sol.cycles, val) > CYCLE_SIZE ? 1 : 0;
+                    for (int j = 0; j < CYCLE_SIZE; ++j) {
+                        int idx1 = indexOf(sol.cycles, val);
+                        int idx1succ = absMod(idx1 + 1, CYCLE_SIZE) + (cycle * CYCLE_SIZE);
+                        int idx2 = j + cycle * CYCLE_SIZE;
+                        if (idx2==idx1 || idx2==idx1succ) continue;
+                        int idx2succ = absMod(idx2 + 1, CYCLE_SIZE) + (cycle * CYCLE_SIZE);
+                        int a = sol.cycles[idx1];
+                        int b = sol.cycles[idx1succ];
+                        int c1 = sol.cycles[idx2];
+                        int d = sol.cycles[idx2succ];
+                        int delta = evalEdgeSwap(instance, sol.cycles, idx1, idx2);
+                        if (delta < 0) {
+                            add_move(LM, {delta, true, a, b, c1, d, -1, -1});
+                        }
+                        delta = evalEdgeSwapValues(instance, sol.cycles, a, b, d, c1);
+                        if (delta < 0) {
+                            add_move(LM, {delta, true, a, b, d, c1, -1, -1});
+                        }
+                        delta = evalEdgeSwapValues(instance, sol.cycles, b, a, c1, d);
+                        if (delta < 0) {
+                            add_move(LM, {delta, true, b, a, c1, d, -1, -1});
+                        }
+                    }
+                }
+
+                for (const auto& val : {performedMove.a, performedMove.b, performedMove.c, performedMove.d}) {
+                    int cycle;
+                    if (indexOf(sol.cycles, val) < CYCLE_SIZE) {
+                        cycle = 1;
+                    } else {
+                        cycle = 0;
+                    }
+                    for (int i = 0; i < CYCLE_SIZE; ++i) {
+                        int idx1 = indexOf(sol.cycles, val);
+                        int idx2 = i+CYCLE_SIZE*cycle;
+                        int i1 = idx1;
+                        int i2 = idx2;
 
                         int temp1n = absMod(i1+1, CYCLE_SIZE);
                         int temp2n = absMod(i2+1, CYCLE_SIZE);
@@ -596,124 +777,92 @@ extern "C" {
                         int e = sol.cycles[i2];
                         int f = sol.cycles[i2n];
 
-                        LM.push_back({delta, false, a, b, c, d, e, f});
+                        int delta = evalVertexSwap(instance, sol.cycles, idx1, idx2);
+                        if (delta < 0) {
+                            add_move(LM, {delta, false, a, b, c, d, e, f});
+                        }
                     }
                 }
-            }
+            } else {
+            // po zamianie wierzchołków
 
-            LM.sort([](const Move& a, const Move& b) { return a.delta < b.delta; });
-        };
-
-        auto updateMoveList = [&](std::list<Move>& LM, const Move& performedMove) {
-            // for (auto it = LM.begin(); it != LM.end(); ) {
-            //     if (it->isEdgeMove) {
-            //         Applicability app = isEdgeMoveApplicable(*it, sol.cycles);
-            //         if (app == NOT_APPLICABLE) {
-            //             it = LM.erase(it); // Ruch trwale niemożliwy - usuwamy
-            //             continue;
-            //         }
-            //     } else {
-            //         Applicability app = isVertexMoveApplicable(*it, sol.cycles);
-            //         if (app == NOT_APPLICABLE) {
-            //             it = LM.erase(it); // Ruch trwale niemożliwy - usuwamy
-            //             continue;
-            //         }
-            //     }
-            //     ++it;
-            // }
-
-            // Teraz dodaj nowe ruchy związane z lokalną zmianą
-            // Po swapEdge fragment cyklu może zmienić kierunek, więc nowe ruchy mogą być możliwe.
-
-#if 1
-            for (int cycle = 0; cycle < 2; cycle++){
-                for (int i = 0; i < CYCLE_SIZE; ++i) {
+                for (const auto& val : {performedMove.a, performedMove.e, performedMove.b, performedMove.f}) {
+                    int cycle = indexOf(sol.cycles, val) > CYCLE_SIZE ? 1 : 0;
                     for (int j = 0; j < CYCLE_SIZE; ++j) {
-                        if(i >= j ) continue;
-                        if (absMod(i + 1, CYCLE_SIZE) == j || absMod(j + 1, CYCLE_SIZE) == i) continue;
-                        
-                        int idx1 = i + cycle * CYCLE_SIZE;
+                        int idx1 = indexOf(sol.cycles, val);
+                        int idx1succ = absMod(idx1 + 1, CYCLE_SIZE) + (cycle * CYCLE_SIZE);
                         int idx2 = j + cycle * CYCLE_SIZE;
+                        if (idx2==idx1 || idx2==idx1succ) continue;
+                        int idx2succ = absMod(idx2 + 1, CYCLE_SIZE) + (cycle * CYCLE_SIZE);
                         int a = sol.cycles[idx1];
-                        int b = sol.cycles[absMod(idx1 + 1, CYCLE_SIZE) + (cycle * CYCLE_SIZE)];
+                        int b = sol.cycles[idx1succ];
                         int c1 = sol.cycles[idx2];
-                        int d = sol.cycles[absMod(idx2 + 1, CYCLE_SIZE) + (cycle * CYCLE_SIZE)];
-
-                        // Sprawdzamy czy ten ruch już istnieje na liście
-                        // bool exists = false;
-                        // for (const auto& move : LM) {
-                        //     if(!move.isEdgeMove) continue;
-                        //     if (!(move.a==a && move.b==b && move.c==c1 && move.d==d)) continue;
-                        //     exists = true;
-                        //     break;
-                        // }
-                        // if (exists) continue;
-
+                        int d = sol.cycles[idx2succ];
                         int delta = evalEdgeSwap(instance, sol.cycles, idx1, idx2);
                         if (delta < 0) {
-                            LM.push_back({delta, true, a, b, c1, d, -1, -1});
+                            add_move(LM, {delta, true, a, b, c1, d, -1, -1});
+                        }
+                        delta = evalEdgeSwapValues(instance, sol.cycles, a, b, d, c1);
+                        if (delta < 0) {
+                            add_move(LM, {delta, true, a, b, d, c1, -1, -1});
+                        }
+                        delta = evalEdgeSwapValues(instance, sol.cycles, b, a, c1, d);
+                        if (delta < 0) {
+                            add_move(LM, {delta, true, b, a, c1, d, -1, -1});
+                        }
+                    }
+                }
+
+                for (const auto& val : {performedMove.a, performedMove.b, performedMove.c, performedMove.d, performedMove.e, performedMove.f}) {
+                    int cycle;
+                    if (indexOf(sol.cycles, val) < CYCLE_SIZE) {
+                        cycle = 1;
+                    } else {
+                        cycle = 0;
+                    }
+                    for (int i = 0; i < CYCLE_SIZE; ++i) {
+                        int idx1 = indexOf(sol.cycles, val);
+                        int idx2 = i+CYCLE_SIZE*cycle;
+                        int i1 = idx1;
+                        int i2 = idx2;
+
+                        int temp1n = absMod(i1+1, CYCLE_SIZE);
+                        int temp2n = absMod(i2+1, CYCLE_SIZE);
+                        int temp1p = absMod(i1-1, CYCLE_SIZE);
+                        int temp2p = absMod(i2-1, CYCLE_SIZE);
+                        int i1n = i1 < CYCLE_SIZE ? temp1n : temp1n + CYCLE_SIZE;
+                        int i2n = i2 < CYCLE_SIZE ? temp2n : temp2n + CYCLE_SIZE;
+                        int i1p = i1 < CYCLE_SIZE ? temp1p : temp1p + CYCLE_SIZE;
+                        int i2p = i2 < CYCLE_SIZE ? temp2p : temp2p + CYCLE_SIZE;
+
+                        int a = sol.cycles[i1p];
+                        int b = sol.cycles[i1];
+                        int c = sol.cycles[i1n];
+                        int d = sol.cycles[i2p];
+                        int e = sol.cycles[i2];
+                        int f = sol.cycles[i2n];
+
+                        int delta = evalVertexSwap(instance, sol.cycles, idx1, idx2);
+                        if (delta < 0) {
+                            add_move(LM, {delta, false, a, b, c, d, e, f});
                         }
                     }
                 }
             }
-#endif
-#if 1
-            // Dodaj nowe vertex swap ruchy
-            for (const auto& val : {performedMove.a, performedMove.b, performedMove.c, performedMove.d, performedMove.e, performedMove.f}) {
-                if (val == -1) continue;
-                int cycle = -1;
-                if (val < CYCLE_SIZE) {
-                    cycle = 1;
-                } else {
-                    cycle = 0;
-                }
-                for (int i = 0; i < CYCLE_SIZE; ++i) {
-                    int idx1 = indexOf(sol.cycles, val);
-                    int idx2 = i+CYCLE_SIZE*cycle;
-                    bool exists = false;
-                    int i1 = idx1;
-                    int i2 = idx2;
 
-                    int temp1n = absMod(i1+1, CYCLE_SIZE);
-                    int temp2n = absMod(i2+1, CYCLE_SIZE);
-                    int temp1p = absMod(i1-1, CYCLE_SIZE);
-                    int temp2p = absMod(i2-1, CYCLE_SIZE);
-                    int i1n = i1 < CYCLE_SIZE ? temp1n : temp1n + CYCLE_SIZE;
-                    int i2n = i2 < CYCLE_SIZE ? temp2n : temp2n + CYCLE_SIZE;
-                    int i1p = i1 < CYCLE_SIZE ? temp1p : temp1p + CYCLE_SIZE;
-                    int i2p = i2 < CYCLE_SIZE ? temp2p : temp2p + CYCLE_SIZE;
-
-                    int a = sol.cycles[i1p];
-                    int b = sol.cycles[i1];
-                    int c = sol.cycles[i1n];
-                    int d = sol.cycles[i2p];
-                    int e = sol.cycles[i2];
-                    int f = sol.cycles[i2n];
-
-                    // for (const auto& move : LM) {
-                    //     if(!move.isEdgeMove) continue;
-
-                    //     if (!(move.a==a && move.b==b && move.c==c && move.d==d && move.e==e && move.f==f)) continue;
-                    //     exists = true;
-                    //     break;
-                    // }
-                    if (exists) continue;
-
-                    int delta = evalVertexSwap(instance, sol.cycles, idx1, idx2);
-                    if (delta < 0) {
-                        LM.push_back({delta, false, a, b, c, d, e, f});
-                    }
-                }
-            }
-#endif
+            #ifdef CONTAINER_LIST
+            LM.sort();
+            #endif
             
-            LM.sort([](const Move& a, const Move& b) { return a.delta < b.delta; });
         };
+
 
         initializeMoveList(LM);
 
+
         bool improved;
         do {
+EOI:
             improved = false;
 
             for (auto it = LM.begin(); it != LM.end(); ) {
@@ -725,22 +874,46 @@ extern "C" {
                     app = isVertexMoveApplicable(*it, sol.cycles);
                 }
 
+                int a = it->a;
+                int b = it->b;
+                int c = it->c;
+                int d = it->d;
+                int e = it->e;
+                int f = it->f;
+                int delta = it->delta;
+
+                if(app==NEEDS_REVERSAL){
+                    if (it->isEdgeMove){
+                        a = it->b;
+                        b = it->a;
+                        c = it->d;
+                        d = it->c;
+                    } else {
+                        a = it->c;
+                        c = it->a;
+                        d = it->f;
+                        f = it->d;
+                    }
+                    app = APPLICABLE;
+                }
+
                 switch (app) {
                     case APPLICABLE:
+
                         if (it->isEdgeMove) {
-                            swapEdge(sol.cycles, indexOf(sol.cycles, it->a), indexOf(sol.cycles, it->c));
+                            swapEdge(sol.cycles, indexOf(sol.cycles, a), indexOf(sol.cycles, c));
                         } else {
-                            swapVertex(sol.cycles, indexOf(sol.cycles, it->b), indexOf(sol.cycles, it->e));
+                            swapVertex(sol.cycles, indexOf(sol.cycles, b), indexOf(sol.cycles, e));
                         }
-                        sol.value += it->delta;
+                        sol.value += delta;
+
                         {
-                            Move performedMove = *it;
+                            Move performedMove = {delta,it->isEdgeMove,a,b,c,d,e,f};
                             LM.erase(it);
                             updateMoveList(LM, performedMove);
                         }
                         improved = true;
-                        if (sol.value <= 0) __debugbreak();
-                        //std::cout << "delta " << it->delta << " val: " << sol.value << std::endl;
+
                         goto EOI;
 
                     case FUTURE_MAYBE:
@@ -753,14 +926,12 @@ extern "C" {
                         break;
                 }
             }
-EOI:
-    ;
         } while (improved);
-
         sol.backToOut(outSolution);
     }
 
     int main() {
+
         SolutionOut solOut = {{2,4,0,1,3,5},{6,7,8,9,10,11},0};
         Instance instance =  {{
             {0, 2, 4, 7, 6, 4, 12, 22, 5, 32, 54, 6},
@@ -777,8 +948,7 @@ EOI:
             {6, 4, 3, 2, 5, 2, 6, 16, 4, 26, 48, 0}
         }};
 
-        weighted_regret_heuristic(instance, &solOut);
-        std::cout<<solOut.value<<std::endl;
+        cache_alg(instance, &solOut);
     }
 
 }
