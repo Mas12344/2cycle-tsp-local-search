@@ -20,6 +20,12 @@
 #include <mutex>
 
 
+#include <future>
+#include <queue>
+#include <condition_variable>
+#include <functional>
+
+
 #if 1
 #define NODE_COUNT 200
 #else
@@ -41,10 +47,76 @@ struct SolutionOut {
     int value;
 }; 
 
+
+
+class ThreadPool {
+public:
+    ThreadPool(size_t numThreads);
+    ~ThreadPool();
+    void enqueue(std::function<void()> task);
+    void shutdown();
+
+private:
+    std::vector<std::thread> workers;
+    std::queue<std::function<void()>> tasks;
+    
+    std::mutex queueMutex;
+    std::condition_variable condition;
+    bool stop = false;
+
+    void worker();
+};
+
+ThreadPool::ThreadPool(size_t numThreads) {
+    for (size_t i = 0; i < numThreads; i++) {
+        workers.emplace_back(&ThreadPool::worker, this);
+    }
+}
+
+void ThreadPool::worker() {
+    while (true) {
+        std::function<void()> task;
+        {
+            std::unique_lock<std::mutex> lock(queueMutex);
+            condition.wait(lock, [this] { return stop || !tasks.empty(); });
+            if (stop && tasks.empty()) return;
+            task = std::move(tasks.front());
+            tasks.pop();
+        }
+        task();
+    }
+}
+
+void ThreadPool::enqueue(std::function<void()> task) {
+    {
+        std::unique_lock<std::mutex> lock(queueMutex);
+        tasks.push(std::move(task));
+    }
+    condition.notify_one();
+}
+
+void ThreadPool::shutdown() {
+    {
+        std::unique_lock<std::mutex> lock(queueMutex);
+        stop = true;
+    }
+    condition.notify_all();
+    for (std::thread& worker : workers) {
+        if (worker.joinable()) worker.join();
+    }
+}
+
+ThreadPool::~ThreadPool() {
+    shutdown();
+}
+
+
 struct Point {
     double x;
     double y;
 };
+
+
 
 std::vector<Point> loadData(const std::string& filename) {
     std::ifstream file(filename);
@@ -995,7 +1067,10 @@ int hybrid_alg(const Instance& instance, SolutionOut* sol, int timeLimit, bool d
     std::set<SolutionOut> population;
     while (population.size() < POPULATION_SIZE/2) {
         SolutionOut newSol = random_solution();
-        baseline_alg(instance, &newSol);
+        Solution solution(&newSol);
+        solution.eval(instance);
+        solution.backToOut(&newSol);
+        //baseline_alg(instance, &newSol);
         population.insert(newSol);
     }
     while (population.size() < POPULATION_SIZE) {
@@ -1006,14 +1081,17 @@ int hybrid_alg(const Instance& instance, SolutionOut* sol, int timeLimit, bool d
     }
     int c = 0;
     while(time_elapsed(start) < timeLimit) {
-        while (population.size() < POPULATION_SIZE+1) {
+        int try_limit = 6;
+        while (population.size() < POPULATION_SIZE+1 && try_limit > 0) {
             if (time_elapsed(start) >= timeLimit) break;
             parents.clear();
             std::sample(population.begin(), population.end(), std::back_inserter(parents), 2, g);
             SolutionOut child = recombine_parents(instance, parents);
             if(doLocalSearch) baseline_alg(instance, &child);
             population.insert(child);
+            try_limit--;
         }
+        if(try_limit <= 0) break;
         if(population.size()>0) population.erase(--population.end());
         c++;
     }
@@ -1032,17 +1110,48 @@ void thread_alg(const Instance& instance, std::set<SolutionOut>& solutions, int 
 }
 
 void mt_alg(const Instance& instance, SolutionOut* sol, int timeLimit, bool doLocalSearch=false) {
+    // std::set<SolutionOut> allSolutions;
+    // std::vector<std::thread> threads;
+    // for (int i = 0; i < MAX_THREADS; i++) {
+    //     threads.push_back(std::thread(thread_alg, std::ref(instance), std::ref(allSolutions), timeLimit, doLocalSearch));
+    // }
+    // for (auto& th : threads) {
+    //         th.join();
+    // }
+
+    // *sol = *allSolutions.begin();
+    const int THREAD_LIMIT = 10;
+    const auto start = std::chrono::high_resolution_clock::now();
+    const auto end = start + std::chrono::milliseconds(timeLimit - 100);
+    
     std::set<SolutionOut> allSolutions;
-    std::vector<std::thread> threads;
-    for (int i = 0; i < MAX_THREADS; i++) {
-        threads.push_back(std::thread(thread_alg, std::ref(instance), std::ref(allSolutions), timeLimit, doLocalSearch));
-    }
-    for (auto& th : threads) {
-            th.join();
+    std::mutex solMutex;
+
+    ThreadPool pool(THREAD_LIMIT);
+    std::atomic<bool> stopFlag{false};
+
+    while (std::chrono::high_resolution_clock::now() < end) {
+        pool.enqueue([&] {
+            if (std::chrono::high_resolution_clock::now() >= end || stopFlag) return;
+
+            SolutionOut s;
+            int remaining = std::chrono::duration_cast<std::chrono::milliseconds>(end - std::chrono::high_resolution_clock::now()).count();
+            if (remaining < 100) return;
+            hybrid_alg(instance, &s, remaining, doLocalSearch);
+
+            std::lock_guard<std::mutex> lock(solMutex);
+            allSolutions.insert(s);
+        });
+
+        // mała przerwa, żeby nie zalewać wątków na raz
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    *sol = *allSolutions.begin();
+    stopFlag = true;
+    pool.shutdown();
 
+    if (!allSolutions.empty())
+        *sol = *allSolutions.begin();
 }
 
 int main() {
@@ -1052,9 +1161,9 @@ int main() {
 
     int lowest = 40000;
 
+    SolutionOut solOut = random_solution();
     for (int i = 0; i < 100; i ++) {
-        SolutionOut solOut = random_solution();
-        mt_alg(instance, &solOut, 5500, true);
+        mt_alg(instance, &solOut, 6800, true);
         std::cout<<i <<": Score: "<<solOut.value<<std::endl;
 
         if (solOut.value < lowest) {

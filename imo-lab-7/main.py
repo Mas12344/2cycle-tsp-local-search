@@ -230,9 +230,9 @@ def main():
                 elif algorithm == "hybrid_alg (no local search)":
                     iters = sa.hybrid_alg(*args, 6800, False)
                 elif algorithm == "mt_alg":
-                    iters = sa.hybrid_alg(*args, 6800, True)
+                    iters = sa.mt_alg(*args, 6800, True)
                 elif algorithm == "mt_alg (no local search)":
-                    iters = sa.hybrid_alg(*args, 6800, False)
+                    iters = sa.mt_alg(*args, 6800, False)
                 elif algorithm == "baseline":
                     sa.baseline_alg(*args)
                 elif algorithm == "cache":
